@@ -1,0 +1,56 @@
+name: Deploy AKS
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "k8s/**", ".github/workflows/deploy-aks.yml" ]
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
+      AKS_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+      ACR_NAME: ${{ secrets.ACR_NAME }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_SSLMODE: ${{ secrets.DB_SSLMODE }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_EXPIRES_MIN: ${{ secrets.JWT_EXPIRES_MIN }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az aks get-credentials -g ${RESOURCE_GROUP} -n ${AKS_NAME} --overwrite-existing
+      - name: Ensure namespace
+        run: kubectl apply -f k8s/backend/namespace.yaml
+      - name: Apply DB secret
+        run: |
+          sed -e "s/{{REEMPLAZA_CON_TU_PASSWORD}}/${DB_PASSWORD}/"               -e "s/parental-control-db.postgres.database.azure.com/${DB_HOST}/"               -e "s/quadara_db/${DB_NAME}/"               -e "s/pgadmin/${DB_USER}/"               -e "s/require/${DB_SSLMODE:-require}/"               k8s/backend/secret-db.yaml | kubectl apply -f -
+      - name: Apply JWT secret
+        run: |
+          sed -e "s/{{REEMPLAZA_CON_TU_SECRETO}}/${JWT_SECRET}/"               -e "s/\"60\"/\"${JWT_EXPIRES_MIN:-60}\"/"               k8s/backend/secret-jwt.yaml | kubectl apply -f -
+      - name: Deploy
+        run: |
+          kubectl apply -f k8s/backend/auth-deploy.yaml
+          kubectl apply -f k8s/backend/device-deploy.yaml
+          kubectl apply -f k8s/backend/monitoring-deploy.yaml
+          kubectl apply -f k8s/backend/ingress.yaml
+      - name: Wait for rollouts
+        run: |
+          kubectl rollout status deployment/auth-service --timeout=120s || true
+          kubectl rollout status deployment/device-management-service --timeout=120s || true
+          kubectl rollout status deployment/monitoring-service --timeout=120s || true

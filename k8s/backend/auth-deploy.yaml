@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: quadaraacr.azurecr.io/auth-service:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: SERVICE_NAME
+              value: "auth-service"
+            - name: DB_HOST
+              valueFrom: {secretKeyRef: {name: quadara-db-secret, key: DB_HOST}}
+            - name: DB_NAME
+              valueFrom: {secretKeyRef: {name: quadara-db-secret, key: DB_NAME}}
+            - name: DB_USER
+              valueFrom: {secretKeyRef: {name: quadara-db-secret, key: DB_USER}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: quadara-db-secret, key: DB_PASSWORD}}
+            - name: DB_SSLMODE
+              valueFrom: {secretKeyRef: {name: quadara-db-secret, key: DB_SSLMODE}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: quadara-jwt-secret, key: JWT_SECRET}}
+            - name: JWT_EXPIRES_MIN
+              valueFrom: {secretKeyRef: {name: quadara-jwt-secret, key: JWT_EXPIRES_MIN}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: default
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 80
+      targetPort: 80
