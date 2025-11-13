@@ -1,37 +1,51 @@
-name: CI Build (ACR)
+name: CI - Build backend images
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
     paths:
       - "backend/**"
-      - "k8s/backend/**"
-      - "scripts/**"
-  workflow_dispatch: {}
+      - "scripts/build_all_acr.sh"
+      - ".github/workflows/ci-build.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
-  build-and-push:
+  build-backend:
     runs-on: ubuntu-latest
-
-    env:                       # ⬅️ Añadimos esto
-      ACR_NAME: quadaraacr
-      RESOURCE_GROUP: ParentalControl-RG
-      AKS_NAME: parental-control-aks
+    env:
+      ACR_NAME: ${{ secrets.ACR_NAME }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Login to Azure
+      - name: Login a Azure con OIDC
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Azure CLI version
+      - name: Mostrar versión de Azure CLI
         run: az version
 
-      - name: Build and push images to ACR (auth/device/monitor)
+      - name: Validar que ACR_NAME está configurado
         run: |
-          chmod +x scripts/build_all_acr.sh
-          ./scripts/build_all_acr.sh
+          if [ -z "${ACR_NAME}" ]; then
+            echo "❌ ACR_NAME no está definido en secrets."
+            exit 1
+          fi
+          echo "✅ ACR_NAME=${ACR_NAME}"
+
+      - name: Dar permisos al script de build
+        run: chmod +x scripts/build_all_acr.sh
+
+      - name: Ejecutar build de imágenes en ACR
+        run: ./scripts/build_all_acr.sh
