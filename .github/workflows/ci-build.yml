@@ -14,6 +14,11 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
+    env:                       # ⬅️ Añadimos esto
+      ACR_NAME: quadaraacr
+      RESOURCE_GROUP: ParentalControl-RG
+      AKS_NAME: parental-control-aks
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
