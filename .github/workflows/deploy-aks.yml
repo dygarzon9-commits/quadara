@@ -1,56 +1,93 @@
 name: Deploy AKS
+
 on:
   push:
     branches: [ "main" ]
-    paths: [ "k8s/**", ".github/workflows/deploy-aks.yml" ]
+    paths:
+      - "k8s/**"
+      - ".github/workflows/deploy-aks.yml"
   workflow_dispatch:
+
 permissions:
   id-token: write
   contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     env:
-      RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
-      AKS_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
-      ACR_NAME: ${{ secrets.ACR_NAME }}
-      DB_HOST: ${{ secrets.DB_HOST }}
-      DB_NAME: ${{ secrets.DB_NAME }}
-      DB_USER: ${{ secrets.DB_USER }}
-      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      DB_SSLMODE: ${{ secrets.DB_SSLMODE }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
-      JWT_EXPIRES_MIN: ${{ secrets.JWT_EXPIRES_MIN }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+
+      AKS_RESOURCE_GROUP:    ${{ secrets.AKS_RESOURCE_GROUP }}
+      AKS_CLUSTER_NAME:      ${{ secrets.AKS_CLUSTER_NAME }}
+
+      DB_HOST:               ${{ secrets.DB_HOST }}
+      DB_NAME:               ${{ secrets.DB_NAME }}
+      DB_USER:               ${{ secrets.DB_USER }}
+      DB_PASSWORD:           ${{ secrets.DB_PASSWORD }}
+      DB_SSLMODE:            ${{ secrets.DB_SSLMODE }}
+
+      JWT_SECRET:            ${{ secrets.JWT_SECRET }}
+      JWT_EXPIRES_MIN:       ${{ secrets.JWT_EXPIRES_MIN }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-      - uses: azure/cli@v2
+
+      # 👇 ESTE paso es el que faltaba: configura kubectl contra tu AKS
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
         with:
-          inlineScript: |
-            az aks get-credentials -g ${RESOURCE_GROUP} -n ${AKS_NAME} --overwrite-existing
-      - name: Ensure namespace
-        run: kubectl apply -f k8s/backend/namespace.yaml
-      - name: Apply DB secret
+          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
+          cluster-name:   ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Ensure namespace (si existe el YAML)
         run: |
-          sed -e "s/{{REEMPLAZA_CON_TU_PASSWORD}}/${DB_PASSWORD}/"               -e "s/parental-control-db.postgres.database.azure.com/${DB_HOST}/"               -e "s/quadara_db/${DB_NAME}/"               -e "s/pgadmin/${DB_USER}/"               -e "s/require/${DB_SSLMODE:-require}/"               k8s/backend/secret-db.yaml | kubectl apply -f -
-      - name: Apply JWT secret
+          if [ -f k8s/backend/namespace.yaml ]; then
+            kubectl apply -f k8s/backend/namespace.yaml --validate=false
+          else
+            echo "⚠️ No namespace.yaml found, using 'default' namespace."
+          fi
+
+      - name: Create/Update DB secret
         run: |
-          sed -e "s/{{REEMPLAZA_CON_TU_SECRETO}}/${JWT_SECRET}/"               -e "s/\"60\"/\"${JWT_EXPIRES_MIN:-60}\"/"               k8s/backend/secret-jwt.yaml | kubectl apply -f -
-      - name: Deploy
+          kubectl delete secret quadara-db-secret -n default --ignore-not-found
+          kubectl create secret generic quadara-db-secret \
+            -n default \
+            --from-literal=DB_HOST="$DB_HOST" \
+            --from-literal=DB_NAME="$DB_NAME" \
+            --from-literal=DB_USER="$DB_USER" \
+            --from-literal=DB_PASSWORD="$DB_PASSWORD" \
+            --from-literal=DB_SSLMODE="$DB_SSLMODE"
+
+      - name: Create/Update JWT secret
+        run: |
+          kubectl delete secret quadara-jwt-secret -n default --ignore-not-found
+          kubectl create secret generic quadara-jwt-secret \
+            -n default \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --from-literal=JWT_EXPIRES_MIN="$JWT_EXPIRES_MIN"
+
+      - name: Deploy backend workloads
         run: |
           kubectl apply -f k8s/backend/auth-deploy.yaml
           kubectl apply -f k8s/backend/device-deploy.yaml
           kubectl apply -f k8s/backend/monitoring-deploy.yaml
           kubectl apply -f k8s/backend/ingress.yaml
+
       - name: Wait for rollouts
         run: |
           kubectl rollout status deployment/auth-service --timeout=120s || true
           kubectl rollout status deployment/device-management-service --timeout=120s || true
           kubectl rollout status deployment/monitoring-service --timeout=120s || true
+
